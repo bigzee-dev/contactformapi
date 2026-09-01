@@ -14,8 +14,21 @@ let siteConfig = {};
 try {
   siteConfig = JSON.parse(process.env.SITE_CONFIG || "{}");
 } catch (error) {
-  console.error("Invalid SITE_CONFIG in .env");
+  const raw = process.env.SITE_CONFIG || "";
+
+  console.error("Invalid SITE_CONFIG: " + error.message);
+  console.error("SITE_CONFIG must be a single line of valid JSON, with no");
+  console.error("surrounding quotes. Received " + raw.length + " characters:");
+  console.error(raw.slice(0, 200) + (raw.length > 200 ? "..." : ""));
+
   process.exit(1);
+}
+
+if (Object.keys(siteConfig).length === 0) {
+  console.warn(
+    "WARNING: SITE_CONFIG is empty, so no origins are allowed and every " +
+      "request will be rejected with 403.",
+  );
 }
 
 // Allowed origins
@@ -111,7 +124,7 @@ app.post("/api/contact", async (req, res) => {
     /*
      * Get submitted form data.
      */
-    const { name, email, phonenumber, message } = req.body;
+    const { name, email, phone: submittedPhone, message } = req.body;
 
     // Basic validation
     if (!name || !email || !message) {
@@ -126,7 +139,8 @@ app.post("/api/contact", async (req, res) => {
      * missing, null or an empty string. Only include it in the email
      * when a value was actually submitted.
      */
-    const phone = typeof phonenumber === "string" ? phonenumber.trim() : "";
+    const phone =
+      typeof submittedPhone === "string" ? submittedPhone.trim() : "";
 
     const hasPhone = phone.length > 0;
 
@@ -193,6 +207,31 @@ app.get("/", (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Contact API running on port ${PORT}`);
 });
+
+/*
+ * Graceful shutdown.
+ *
+ * Container platforms (Docker, Dokploy) send SIGTERM to ask the
+ * process to stop, then SIGKILL if it does not. Without a handler
+ * Node dies abruptly and npm reports the signal as an error.
+ */
+function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down...`);
+
+  server.close(() => {
+    console.log("Server closed");
+    process.exit(0);
+  });
+
+  // Force exit if connections do not close in time.
+  setTimeout(() => {
+    console.error("Forced shutdown after timeout");
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
